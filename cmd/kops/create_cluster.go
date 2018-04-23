@@ -86,6 +86,9 @@ type CreateClusterOptions struct {
 	NodeSecurityGroups   []string
 	MasterSecurityGroups []string
 	AssociatePublicIP    *bool
+	// Specify the Iam Role to be used by the masters and nodes.
+	MasterIamRole string
+	NodeIamRole   string
 
 	// SSHPublicKeys is a map of the SSH public keys we should configure; required on AWS, not required on GCE
 	SSHPublicKeys map[string][]byte
@@ -302,6 +305,10 @@ func NewCmdCreateCluster(f *util.Factory, out io.Writer) *cobra.Command {
 
 	cmd.Flags().StringSliceVar(&options.NodeSecurityGroups, "node-security-groups", options.NodeSecurityGroups, "Add precreated additional security groups to nodes.")
 	cmd.Flags().StringSliceVar(&options.MasterSecurityGroups, "master-security-groups", options.MasterSecurityGroups, "Add precreated additional security groups to masters.")
+
+	// Passing existing Iam Role to be assigined to the master and node
+	cmd.Flags().StringSliceVar(&options.NodeIamRole, "node-iam-role", options.NodeIamRole, "Use an existing iam role for the nodes")
+	cmd.Flags().StringSliceVar(&options.MasterIamRole, "master-iam-role", options.MasterIamRole, "Use an existing iam role for the masters.")
 
 	cmd.Flags().StringVar(&options.Channel, "channel", options.Channel, "Channel for default versions and configuration to use")
 
@@ -766,6 +773,19 @@ func RunCreateCluster(f *util.Factory, out io.Writer, c *CreateClusterOptions) e
 			group.Spec.RootVolumeSize = fi.Int32(c.NodeVolumeSize)
 		}
 	}
+
+	var customIamRoles map[string][string]
+	customIamRoles = make(map[string]string)
+
+	if c.MasterIamRole != "" {
+		customIamRoles["Master"] = c.MasterIamRole
+	}
+
+	if c.NodeIamRole != "" {
+		customIamRoles["Node"] = c.NodeIamRole
+	}
+
+	cluster.Spec.CustomIamRoles = customIamRoles
 
 	if c.DNSZone != "" {
 		cluster.Spec.DNSZone = c.DNSZone

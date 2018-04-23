@@ -70,53 +70,70 @@ func (b *IAMModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		name := b.IAMName(role)
 
 		var iamRole *awstasks.IAMRole
-		{
-			rolePolicy, err := b.buildAWSIAMRolePolicy()
-			if err != nil {
-				return err
-			}
 
+		customIamRoles := b.Cluster.Spec.RoleCustomIamRoles
+		// If we've specified an IAMRoleArn for this cluster role,
+		// do not create a new one
+		if customIamRoles[roleAsString] != "" {
+			arn := customIamRoles[roleAsString]
+			rs := strings.Split(arn, "/")
+			roleName := rs[len(rs)-1]
 			iamRole = &awstasks.IAMRole{
-				Name:      s(name),
-				Lifecycle: b.Lifecycle,
+				Name: &roleName,
+				ID:   &arn,
 
-				RolePolicyDocument: fi.WrapResource(rolePolicy),
-				ExportWithID:       s(strings.ToLower(string(role)) + "s"),
+				// We set Policy Document to nil as this role will be managed externaly
+				RolePolicyDocument: nil,
 			}
 			c.AddTask(iamRole)
+		} else {
+			{
+				rolePolicy, err := b.buildAWSIAMRolePolicy()
+				if err != nil {
+					return err
+				}
 
+				iamRole = &awstasks.IAMRole{
+					Name:      s(name),
+					Lifecycle: b.Lifecycle,
+
+					RolePolicyDocument: fi.WrapResource(rolePolicy),
+					ExportWithID:       s(strings.ToLower(string(role)) + "s"),
+				}
+				c.AddTask(iamRole)
+
+			}
+
+			{
+				iamPolicy := &iam.PolicyResource{
+					Builder: &iam.PolicyBuilder{
+						Cluster: b.Cluster,
+						Role:    role,
+						Region:  b.Region,
+					},
+				}
+
+				// This is slightly tricky; we need to know the hosted zone id,
+				// but we might be creating the hosted zone dynamically.
+
+				// TODO: I don't love this technique for finding the task by name & modifying it
+				dnsZoneTask, found := c.Tasks["DNSZone/"+b.NameForDNSZone()]
+				if found {
+					iamPolicy.DNSZone = dnsZoneTask.(*awstasks.DNSZone)
+				} else {
+					glog.V(2).Infof("Task %q not found; won't set route53 permissions in IAM", "DNSZone/"+b.NameForDNSZone())
+				}
+
+				t := &awstasks.IAMRolePolicy{
+					Name:      s(name),
+					Lifecycle: b.Lifecycle,
+
+					Role:           iamRole,
+					PolicyDocument: iamPolicy,
+				}
+				c.AddTask(t)
+			}
 		}
-
-		{
-			iamPolicy := &iam.PolicyResource{
-				Builder: &iam.PolicyBuilder{
-					Cluster: b.Cluster,
-					Role:    role,
-					Region:  b.Region,
-				},
-			}
-
-			// This is slightly tricky; we need to know the hosted zone id,
-			// but we might be creating the hosted zone dynamically.
-
-			// TODO: I don't love this technique for finding the task by name & modifying it
-			dnsZoneTask, found := c.Tasks["DNSZone/"+b.NameForDNSZone()]
-			if found {
-				iamPolicy.DNSZone = dnsZoneTask.(*awstasks.DNSZone)
-			} else {
-				glog.V(2).Infof("Task %q not found; won't set route53 permissions in IAM", "DNSZone/"+b.NameForDNSZone())
-			}
-
-			t := &awstasks.IAMRolePolicy{
-				Name:      s(name),
-				Lifecycle: b.Lifecycle,
-
-				Role:           iamRole,
-				PolicyDocument: iamPolicy,
-			}
-			c.AddTask(t)
-		}
-
 		var iamInstanceProfile *awstasks.IAMInstanceProfile
 		{
 			iamInstanceProfile = &awstasks.IAMInstanceProfile{
